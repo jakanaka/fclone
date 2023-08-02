@@ -8,9 +8,9 @@ name: build
 on:
   push:
     branches:
-      - '*'
+      - '**'
     tags:
-      - '*'
+      - '**'
   pull_request:
   workflow_dispatch:
     inputs:
@@ -22,17 +22,17 @@ on:
 
 jobs:
   build:
-    #if: ${{ github.repository == 'rclone/rclone' || github.event.inputs.manual }}
+    if: ${{ github.event.inputs.manual == 'true' || (github.repository == 'rclone/rclone' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name)) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        job_name: ['linux', 'linux_386', 'mac_amd64', 'mac_arm64', 'windows', 'other_os', 'go1.18', 'go1.19']
+        job_name: ['linux', 'linux_386', 'mac_amd64', 'mac_arm64', 'windows', 'other_os', 'go1.19', 'go1.20']
 
         include:
           - job_name: linux
             os: ubuntu-latest
-            go: '1.20'
+            go: '1.21.0-rc.3'
             gotags: cmount
             build_flags: '-include "^linux/"'
             check: true
@@ -43,14 +43,14 @@ jobs:
 
           - job_name: linux_386
             os: ubuntu-latest
-            go: '1.20'
+            go: '1.21.0-rc.3'
             goarch: 386
             gotags: cmount
             quicktest: true
 
           - job_name: mac_amd64
             os: macos-11
-            go: '1.20'
+            go: '1.21.0-rc.3'
             gotags: 'cmount'
             build_flags: '-include "^darwin/amd64" -cgo'
             quicktest: true
@@ -59,14 +59,14 @@ jobs:
 
           - job_name: mac_arm64
             os: macos-11
-            go: '1.20'
+            go: '1.21.0-rc.3'
             gotags: 'cmount'
             build_flags: '-include "^darwin/arm64" -cgo -macos-arch arm64 -cgo-cflags=-I/usr/local/include -cgo-ldflags=-L/usr/local/lib'
             deploy: true
 
           - job_name: windows
             os: windows-latest
-            go: '1.20'
+            go: '1.21.0-rc.3'
             gotags: cmount
             cgo: '0'
             build_flags: '-include "^windows/"'
@@ -76,20 +76,20 @@ jobs:
 
           - job_name: other_os
             os: ubuntu-latest
-            go: '1.20'
+            go: '1.21.0-rc.3'
             build_flags: '-exclude "^(windows/|darwin/|linux/)"'
             compile_all: true
             deploy: true
 
-          - job_name: go1.18
-            os: ubuntu-latest
-            go: '1.18'
-            quicktest: true
-            racequicktest: true
-
           - job_name: go1.19
             os: ubuntu-latest
             go: '1.19'
+            quicktest: true
+            racequicktest: true
+
+          - job_name: go1.20
+            os: ubuntu-latest
+            go: '1.20'
             quicktest: true
             racequicktest: true
 
@@ -102,9 +102,6 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
-      - name: Remove test config
-        shell: bash
-        run: rm bin/*.rclone.conf
 
       - name: Install Go
         uses: actions/setup-go@v4
@@ -133,6 +130,11 @@ jobs:
       - name: Install Libraries on macOS
         shell: bash
         run: |
+          # https://github.com/Homebrew/brew/issues/15621#issuecomment-1619266788
+          # https://github.com/orgs/Homebrew/discussions/4612#discussioncomment-6319008
+          unset HOMEBREW_NO_INSTALL_FROM_API
+          brew untap --force homebrew/core
+          brew untap --force homebrew/cask
           brew update
           brew install --cask macfuse
         if: matrix.os == 'macos-11'
@@ -187,13 +189,13 @@ jobs:
         shell: bash
         run: |
           make quicktest
-        if: false
+        if: matrix.quicktest
 
       - name: Race test
         shell: bash
         run: |
           make racequicktest
-        if: false
+        if: matrix.racequicktest
 
       - name: Run librclone tests
         shell: bash
@@ -201,7 +203,7 @@ jobs:
           make -C librclone/ctest test
           make -C librclone/ctest clean
           librclone/python/test_rclone.py
-        if: false
+        if: matrix.librclonetest
 
       - name: Compile all architectures test
         shell: bash
@@ -212,25 +214,15 @@ jobs:
 
       - name: Deploy built binaries
         shell: bash
-        #if: ${{ always() }}
         run: |
           if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then make release_dep_linux ; fi
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then make release_dep_windows ; fi
-          mkdir -p rclonebuild
-          make BETA_UPLOAD_ROOT=rclonebuild ci_beta
-          rm rclonebuild/*latest*
+          make ci_beta
         env:
           RCLONE_CONFIG_PASS: ${{ secrets.RCLONE_CONFIG_PASS }}
         # working-directory: '$(modulePath)'
-        if: matrix.deploy
-        # Deploy binaries:q! if enabled in config && not a PR && not a fork
-        #if: matrix.deploy && github.head_ref == '' && github.repository == 'rclone/rclone'
-
-      - name: "Upload to github artifact"
-        if: ${{ always() }}
-        uses: NyaMisty/upload-artifact-as-is@master
-        with:
-          path: rclonebuild
+        # Deploy binaries if enabled in config && not a PR && not a fork
+        if: env.RCLONE_CONFIG_PASS != '' && matrix.deploy && github.head_ref == '' && github.repository == 'rclone/rclone'
 
   lint:
     if: ${{ github.event.inputs.manual == 'true' || (github.repository == 'rclone/rclone' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name)) }}
@@ -252,7 +244,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.20'
+          go-version: '1.21.0-rc.3'
           check-latest: true
 
       - name: Install govulncheck
@@ -262,7 +254,7 @@ jobs:
         run: govulncheck ./...
 
   android:
-    #if: ${{ github.repository == 'rclone/rclone' || github.event.inputs.manual }}
+    if: ${{ github.event.inputs.manual == 'true' || (github.repository == 'rclone/rclone' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name)) }}
     timeout-minutes: 30
     name: "android-all"
     runs-on: ubuntu-latest
@@ -272,15 +264,12 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
-      - name: Remove test config
-        shell: bash
-        run: rm bin/*.rclone.conf
 
       # Upgrade together with NDK version
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.20'
+          go-version: '1.21.0-rc.3'
 
       - name: Go module cache
         uses: actions/cache@v3
@@ -364,49 +353,8 @@ jobs:
 
       - name: Upload artifacts
         run: |
-          find build -type l -delete
-          #gzip -r9v build
+          make ci_upload
         env:
           RCLONE_CONFIG_PASS: ${{ secrets.RCLONE_CONFIG_PASS }}
         # Upload artifacts if not a PR && not a fork
-
-      - name: "Upload to github artifact"
-        if: ${{ always() }}
-        uses: NyaMisty/upload-artifact-as-is@master
-        with:
-          path: build
-
-
-  release:
-    name: "release"
-    timeout-minutes: 60
-    runs-on: ubuntu-latest
-    needs: [build, android]
-    if: always()
-    steps:
-    - name: "Create artifact directory"
-      run: |
-        mkdir -p rclonebuild_down
-    - name: "Download all artifacts"
-      uses: actions/download-artifact@v2
-      with:
-        path: rclonebuild_down
-    - name: "Rearrange artifacts"
-      run: |
-        find rclonebuild_down
-        mkdir -p rclonebuild
-        mv rclonebuild_down/*/* rclonebuild
-        ls rclonebuild
-        if [ "$(ls -A rclonebuild)" ]; then exit 0; else exit 1; fi
-    - name: "Upload to Github Prerelease"
-      uses: ncipollo/release-action@v1
-      with:
-        artifacts: "rclonebuild/*"
-        token: ${{ secrets.GITHUB_TOKEN }}
-        name: ${{ format('AutoBuild - {0}', github.event.commits[0].message) }}
-        tag: "action_build"
-        commit: master
-        #prerelease: true
-        allowUpdates: true
-        removeArtifacts: true
-        artifactErrorsFailBuild: true
+        if: env.RCLONE_CONFIG_PASS != '' && github.head_ref == '' && github.repository == 'rclone/rclone'
